@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -eq 0 || $1 != /* || $1 == //* ]]; then
+  echo "Usage: amazon-cart-api '/route?parameters' [curl options]" >&2
+  exit 2
+fi
+route=$1
+shift
+key=$(cat "$HOME/.amazon-cart/api-key")
+printf 'header = "Authorization: Bearer %s"\n' "$key" |
+  curl --config - --silent --show-error --fail-with-body --max-time 300 \
+    "http://127.0.0.1:8792$route" "$@"

@@ -14,12 +14,16 @@ import os
 import re
 import secrets
 from html import unescape
+from datetime import datetime
 from typing import Any
 from urllib.parse import quote_plus, unquote, urlencode, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+
+from amazon_cart.orders import parse_orders, return_reminders
 
 API_KEY = (
     os.environ.get("AMAZON_API_KEY")
@@ -50,7 +54,7 @@ REGIONS: dict[str, str] = {
 
 ASIN_RE = re.compile(r"\b([A-Z0-9]{10})\b")
 HEADERS = {
-    "User-Agent": (
+    "User-Agent": os.environ.get("AMAZON_USER_AGENT") or (
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
     ),
@@ -214,6 +218,10 @@ async def _curl(
         "25",
         "-A",
         HEADERS["User-Agent"],
+        "-H",
+        f"Accept: {HEADERS['Accept']}",
+        "-H",
+        f"Accept-Language: {HEADERS['Accept-Language']}",
         "-b",
         jar,
         "-c",
@@ -823,3 +831,59 @@ async def products_alias(
         max_results=max_results,
         include_sponsored=False,
     )
+
+
+@app.get("/orders", dependencies=[Depends(_require_key)])
+async def view_orders(
+    account: str = Query("personal"),
+    year: int | None = Query(None, ge=1995, le=2100),
+    page: int = Query(1, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Read US order history; pages are numbered from 1."""
+    label = _select_account(account)
+    time_filter = f"year-{year}" if year is not None else "months-3"
+    parameters = urlencode({"timeFilter": time_filter, "page": page - 1,
+                            "disableCsd": "missing-library"})
+    domain = REGIONS["us"]
+    html = await _fetch_html(f"https://www.{domain}/your-orders/orders?{parameters}")
+    result = parse_orders(html, domain)
+    result.update({"account": label, "region": "us", "page": page,
+                   "year": year, "time_filter": time_filter})
+    return result
+
+
+@app.get("/returns", dependencies=[Depends(_require_key)])
+async def view_return_reminders(
+    account: str = Query("personal"),
+    reminder_days: str = Query("7,2"),
+    timezone: str = Query(os.environ.get("AMAZON_TIMEZONE", "UTC")),
+    max_pages: int = Query(10, ge=1, le=20),
+    year: int | None = Query(None, ge=1995, le=2100),
+) -> dict[str, Any]:
+    """Read deadlines and due reminders; the caller schedules and deduplicates them."""
+    try:
+        days = sorted({int(value.strip()) for value in reminder_days.split(',')}, reverse=True)
+        if not days or any(day < 0 or day > 90 for day in days):
+            raise ValueError
+        zone = ZoneInfo(timezone)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise HTTPException(400, "Use comma-separated reminder days from 0 to 90 and a valid IANA timezone.")
+    orders = []
+    page = 1
+    pages_read = 0
+    while pages_read < max_pages:
+        result = await view_orders(account=account, year=year, page=page)
+        orders.extend(result['orders'])
+        pages_read += 1
+        next_page = result['next_page']
+        if next_page is None:
+            break
+        if next_page <= page:
+            raise HTTPException(503, "Amazon returned invalid order-history pagination.")
+        page = next_page
+    today = datetime.now(zone).date()
+    return {'account': result['account'], 'timezone': timezone, 'as_of': today.isoformat(),
+            'reminder_days': days, 'order_count': len(orders),
+            'coverage': {'time_filter': result['time_filter'], 'pages_read': pages_read,
+                         'complete': next_page is None, 'next_page': next_page},
+            **return_reminders(orders, today, days)}

@@ -58,13 +58,44 @@ One key covers both carts. Pass `account=personal` or `account=business` on each
 | GET | `/product/{asin}/variations` | Color, size, and style variants |
 | GET | `/cart?account=personal` | Personal cart |
 | GET | `/cart?account=business` | Business cart |
+| GET | `/orders?account=personal&year=2025&page=1` | US order history (local addition) |
+| GET | `/returns?account=personal&reminder_days=7,2` | Return deadlines and due reminder IDs |
 | GET | `/cart/add?asin=…&quantity=1&account=personal` | Add to the personal cart |
 | GET | `/cart/add?asin=…&quantity=1&account=business` | Add to the business cart |
 | POST | `/cart` | JSON body `{"asin","quantity","region","account"}` |
 
 Search also accepts `region` (default `us`). Adding an item does not check out or pay. A missing login, or a jar for the wrong account, returns **HTTP 409**. An Amazon block page returns **HTTP 503**.
 
-### Prompt you can paste to Muse
+For the local `/orders` route, omit `year` for the past three months, or pass
+a year for older purchases. Follow `next_page` until null to read every page
+in that period. Pages start at 1. This route only reads order history.
+
+### Prompt for return-window reminders
+
+```text
+Set up a daily Amazon return-window check at 9 AM America/Los_Angeles.
+Use my existing SSH connection and run:
+~/bin/amazon-cart-api '/returns?account=personal&reminder_days=7,2&timezone=America/Los_Angeles'
+
+Remind me 7 days and 2 days before Amazon's stated return deadline.
+Use due_reminders from the response, and persist each reminder_id after a
+successful notification so you don't send it again. Combine overdue milestones
+for an item into one catch-up notification. Include the product, deadline,
+days remaining, and order_url. Keep API keys and cookies out of chat.
+
+The default scan covers the past three months. On initial setup, also scan
+year=current-year for older purchases with extended deadlines (replace
+current-year with the four-digit year); retain known future
+deadlines as purchases age out of the recent scan. During the start of a new
+year, include the previous year when checking older purchases.
+
+Check coverage.complete and unknown_deadline_count. If coverage is incomplete,
+a deadline is unknown, or the API fails, tell me what needs checking rather
+than claiming all windows were checked. Don't estimate missing deadlines.
+Confirm that the recurring schedule was actually created.
+```
+
+### Prompt for search and cart
 
 ```text
 Amazon search and cart is already running on the machine you SSH into.

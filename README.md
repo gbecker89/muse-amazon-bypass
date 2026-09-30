@@ -1,5 +1,8 @@
 # Muse Amazon Shopping Bypass
 
+This fork adds read-only US order history and return-window reminders using
+Amazon's stated per-item deadlines. See [Return-window reminders](#return-window-reminders).
+
 This is a direct response to Amazon's block of AI agent shopping traffic on 9/20/2026.
 
 Amazon product search and add-to-cart API for [Muse](https://muse.ai). Run it on the machine Muse can already SSH into, then point Muse at `http://127.0.0.1:8792`.
@@ -76,6 +79,59 @@ curl -sS -H "Authorization: Bearer $AMAZON_API_KEY" \
 `POST /cart` accepts `{"asin","quantity","region","account"}`. A missing login returns HTTP 409. An Amazon block page returns HTTP 503.
 
 Use `account=personal` or `account=business` on cart routes. One key covers both carts.
+
+### Local order-history support
+
+`GET /orders?account=personal` reads US Amazon order history using the saved
+session. With no `year`, it returns the past three months. Pass `year=2025`
+(or another year) for older orders. Pages start at 1; follow `next_page`
+until it is null. Each response includes order IDs, dates, totals, shipment
+statuses, product titles and ASINs, plus `available_filters`. `order_count`
+counts only the current page. This route reads orders and does not modify them.
+
+If Amazon returns HTTP 409, open Your Orders in your browser, refresh the
+cookie export, and set `AMAZON_USER_AGENT` to that browser's full user agent.
+The local installation's `~/bin/amazon-cart-start` reads Google Chrome's
+version automatically; `~/bin/amazon-cart-export-chrome` refreshes its cookies.
+
+### Return-window reminders
+
+`GET /returns?account=personal&reminder_days=7,2&timezone=America/Los_Angeles`
+reads every order-history page in the past three months (up to `max_pages`,
+default 10, maximum 20). Add `year=2026` to scan a specific year, including
+older purchases with extended return windows. `coverage.complete` says whether
+every page in the requested period was scanned; it does not cover other years.
+
+Each order item includes Amazon's stated `return_window.deadline`, its
+`source_text`, and status. Missing or unreadable deadlines are `unknown`, never
+estimated from the order date. `/returns` reports `unknown_items` separately.
+Expired windows and items visibly returned or with a return in progress do
+not produce reminders. This feature currently supports the US English site.
+
+The response includes `days_remaining` and `due_reminders` for eligible items
+whose deadline is approaching. Each milestone has a stable `reminder_id` for
+the caller to remember after sending a notification. Missed milestones remain
+due with `catch_up=true` until the deadline passes. Dates use the requested
+timezone (`AMAZON_TIMEZONE`, default UTC); there is no assumed deadline hour.
+
+Muse must schedule the daily check and remember sent reminder IDs. The API
+does not send notifications itself. A suggested schedule is 9 AM in your
+timezone, with notifications at 7 days and 2 days before the deadline.
+If both milestones are overdue on first setup, combine them into one reminder.
+On an API failure, missing deadlines, or incomplete coverage, report the issue
+instead of saying every return window was checked. Follow the response's
+`order_url` to verify an item on Amazon.
+
+Development checks: `python -m unittest discover -s tests -v`.
+
+For the Muse prompts in [MUSE.md](MUSE.md), install the optional localhost
+helper from this checkout. It reads `~/.amazon-cart/api-key` and supplies
+the Bearer header without printing the key:
+
+```bash
+install -Dm700 scripts/amazon-cart-api "$HOME/bin/amazon-cart-api"
+~/bin/amazon-cart-api '/returns?reminder_days=7,2&timezone=America/Los_Angeles'
+```
 
 ## Optional: public HTTPS provider
 
